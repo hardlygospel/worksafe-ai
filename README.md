@@ -42,7 +42,10 @@ When you're at home and want AI assistance without worrying about data handling,
 | 🤖 **35+ Curated Models** | 7 categories — Fast, Balanced, Reasoning, Coding, Multilingual, High Power, Vision |
 | 🖥️ **GPU Detection** | Auto-detects Apple Silicon, NVIDIA, AMD and recommends models |
 | 💬 **Streaming Chat** | Responses appear token-by-token in real time |
-| 📄 **Export: MD / HTML / PDF** | Save conversations in three formats with `/export` |
+| 📄 **Export: MD / HTML / PDF / DOCX / JSON** | Five export formats with `/export` |
+| 🖼️ **Image Input** | Attach images for vision models (llava, moondream) with `/image` |
+| 💾 **Named Sessions** | Save, restore, and manage named conversations with `/session` |
+| 🔍 **Conversation Search** | Find any keyword in the current chat with `/search <term>` |
 | 🖥️ **Shell Completions** | Tab-complete models & flags in Bash, Zsh, and Fish |
 | ✏️ **Custom System Prompt** | Set your own AI persona with `/system <text>` |
 | 🔄 **Model Switching** | Hot-swap models mid-session with `/models` |
@@ -179,11 +182,16 @@ All models are free, open-weight, and run locally. Organised by use case:
 | `/help` | Show all available commands |
 | `/models` | Browse all models and switch |
 | `/new` | Start a fresh conversation |
-| `/history` | Print conversation so far |
-| `/export` | Save conversation as Markdown (default) |
-| `/export html` | Save as a styled HTML page |
-| `/export pdf` | Save as a PDF document |
-| `/export <path>` | Save to a specific path (format from extension) |
+| `/history` | Print conversation history |
+| `/search <term>` | Search conversation for a keyword (highlighted) |
+| `/export` | Export as Markdown (default) |
+| `/export html\|pdf\|docx\|json` | Export in a specific format |
+| `/export <path>` | Export to path — format inferred from extension |
+| `/image <path>` | Attach image for next message (vision models only) |
+| `/session` | List all saved sessions |
+| `/session save [name]` | Save current conversation |
+| `/session load <name>` | Restore a saved conversation |
+| `/session delete <name>` | Delete a saved session |
 | `/system` | Show current system prompt |
 | `/system reset` | Reset to default system prompt |
 | `/system <text>` | Set a custom system prompt |
@@ -211,9 +219,11 @@ Save any conversation in three formats using the `/export` command:
 
 | Command | Output | Use case |
 |---|---|---|
-| `/export` | `.md` Markdown file | Notes, documentation, plain text |
+| `/export` | `.md` Markdown | Notes, documentation, plain text |
 | `/export html` | `.html` styled page | Sharing, archiving, printing |
 | `/export pdf` | `.pdf` document | Reports, records, offline reading |
+| `/export docx` | `.docx` Word document | Office sharing, editing |
+| `/export json` | `.json` transcript | Structured data, automation, archiving |
 | `/export ~/chat.html` | Specific path + format from extension | Custom location |
 
 ### Markdown export
@@ -346,17 +356,65 @@ python3 worksafe_ai.py --model mistral:7b --system "Be concise."
 
 ---
 
+## 🖼️ Image Input (Vision Models)
+
+Send images to vision-capable models with `/image <path>`:
+
+```
+/image ~/screenshots/error.png
+Now describe what you see in this error screen.
+```
+
+The image is attached to your next message and sent alongside the text. Supported formats: `jpg`, `png`, `gif`, `webp`, `bmp`.
+
+**Compatible models:** `llava:7b`, `llava:13b`, `llava-llama3:8b`, `moondream:1.8b`
+
+If you try `/image` with a non-vision model, Worksafe AI will explain which models to switch to instead.
+
+---
+
+## 💾 Named Sessions
+
+Save and restore conversations across app restarts:
+
+```
+/session save work-ideas
+/session                     # list all sessions
+/session load work-ideas     # restore model, system prompt, and history
+/session delete work-ideas
+```
+
+Sessions are stored locally at `~/.worksafe_ai/sessions/` as plain JSON files — no database, no lock-in. Each session saves the model name, system prompt, and full message history.
+
+---
+
+## 🔍 Conversation Search
+
+Find any word or phrase in the current conversation, with the match highlighted in context:
+
+```
+/search database
+/search how to reverse
+/search Python
+```
+
+Results show the speaker, message index, and ±80 characters of surrounding context with the term highlighted in yellow.
+
+---
+
 ## 🤝 Contributing
 
 Contributions are welcome! Open an issue or pull request for:
 - ✅ ~~New model presets or categories~~ — 35+ models across 7 categories
-- ✅ ~~Additional export formats (HTML, PDF)~~ — Markdown, HTML, and PDF supported
+- ✅ ~~Additional export formats (HTML, PDF, DOCX, JSON)~~ — five formats supported
 - ✅ ~~Shell completions~~ — Bash, Zsh, and Fish included
-- ✅ ~~Bug fixes~~ — model install detection fixed
-- Additional export formats (DOCX, JSON transcript)
-- Image input support for vision models (llava, moondream)
-- Conversation search (`/search <term>`)
-- Named sessions & session restore
+- ✅ ~~Bug fixes~~ — model install detection fixed, PEP 668 pip handled
+- ✅ ~~Image input for vision models~~ — `/image <path>` for llava, moondream
+- ✅ ~~Conversation search~~ — `/search <term>` with highlighted results
+- ✅ ~~Named sessions & session restore~~ — `/session save/load/delete`
+- DOCX table-of-contents / heading styles
+- Export to PDF with image thumbnails
+- Ollama model update checker (`/update`)
 
 ---
 

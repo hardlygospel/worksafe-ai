@@ -23,8 +23,10 @@ Powered by Ollama · 100% Offline · No API Keys Required.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -33,6 +35,22 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+
+def _pip_install(packages: list[str]) -> None:
+    """Install packages, trying --user if the environment is externally managed."""
+    for extra in ([], ["--user"], ["--user", "--break-system-packages"]):
+        try:
+            subprocess.check_call(
+                [sys.executable, "-m", "pip", "install", "--quiet"] + extra + packages,
+                stderr=subprocess.DEVNULL,
+            )
+            return
+        except subprocess.CalledProcessError:
+            continue
+    print(f"\n[!] Could not auto-install: {' '.join(packages)}")
+    print(f"    Please run:  pip install {' '.join(packages)}\n")
+    sys.exit(1)
 
 
 def _ensure_deps() -> None:
@@ -46,9 +64,7 @@ def _ensure_deps() -> None:
     except ImportError:
         missing.append("requests>=2.31.0")
     if missing:
-        subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", "--quiet"] + missing
-        )
+        _pip_install(missing)
 
 
 _ensure_deps()
@@ -68,7 +84,9 @@ console = Console()
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 OLLAMA_API  = "http://localhost:11434"
-APP_VERSION = "2.0.0"
+APP_VERSION   = "3.0.0"
+SESSIONS_DIR  = Path.home() / ".worksafe_ai" / "sessions"
+VISION_MODELS = frozenset({"llava", "moondream", "bakllava", "llava-llama3", "llava-phi3"})
 
 DEFAULT_SYSTEM_PROMPT = (
     "You are Worksafe AI, a private assistant running entirely on the user's local machine. "
@@ -312,6 +330,11 @@ def _is_installed(model: str, local: list[str]) -> bool:
     return False
 
 
+def _is_vision_model(model: str) -> bool:
+    base = model.split(":")[0].lower()
+    return any(v in base for v in VISION_MODELS)
+
+
 # ── Hardware detection ────────────────────────────────────────────────────────
 
 @dataclass
@@ -498,20 +521,25 @@ def print_help() -> None:
     t.add_column("Command",     style="bold yellow", no_wrap=True)
     t.add_column("Description", style="white")
     rows = [
-        ("/help",               "Show this help message"),
-        ("/models",             "Browse and switch to a different model"),
-        ("/new",                "Start a fresh conversation"),
-        ("/history",            "Print conversation history"),
-        ("/export",             "Export conversation to Markdown (default)"),
-        ("/export html",        "Export conversation to a styled HTML page"),
-        ("/export pdf",         "Export conversation to a PDF document"),
-        ("/export <path>",      "Export to a specific path (format from extension)"),
-        ("/system",             "Show the current system prompt"),
-        ("/system reset",       "Reset system prompt to default"),
-        ("/system <text>",      "Set a custom system prompt"),
-        ("/clear",              "Clear the screen"),
-        ("/about",              "Privacy and licence information"),
-        ("/quit  /exit",        "Exit Worksafe AI"),
+        ("/help",                    "Show this help message"),
+        ("/models",                  "Browse and switch to a different model"),
+        ("/new",                     "Start a fresh conversation"),
+        ("/history",                 "Print conversation history"),
+        ("/search <term>",           "Search conversation for a keyword"),
+        ("/export",                  "Export as Markdown (default)"),
+        ("/export html|pdf|docx|json","Export in a specific format"),
+        ("/export <path>",           "Export to path — format inferred from extension"),
+        ("/image <path>",            "Attach image for next message (vision models)"),
+        ("/session",                 "List saved sessions"),
+        ("/session save [name]",     "Save current conversation"),
+        ("/session load <name>",     "Restore a saved conversation"),
+        ("/session delete <name>",   "Delete a saved session"),
+        ("/system",                  "Show current system prompt"),
+        ("/system reset",            "Reset system prompt to default"),
+        ("/system <text>",           "Set a custom system prompt"),
+        ("/clear",                   "Clear the screen"),
+        ("/about",                   "Privacy and licence information"),
+        ("/quit  /exit",             "Exit Worksafe AI"),
     ]
     for cmd, desc in rows:
         t.add_row(cmd, desc)
@@ -667,7 +695,7 @@ def choose_model(
         "● = already downloaded[/dim]\n"
     )
 
-    if preselected and any(preselected.split(":")[0] in loc for loc in local):
+    if preselected and _is_installed(preselected, local):
         return preselected
 
     while True:
@@ -835,9 +863,7 @@ def _ensure_fpdf2() -> None:
         import fpdf  # noqa: F401
     except ImportError:
         console.print("[yellow]Installing fpdf2 for PDF export…[/yellow]")
-        subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", "--quiet", "fpdf2>=2.7.0"]
-        )
+        _pip_install(["fpdf2>=2.7.0"])
 
 
 def _export_pdf(messages: list[dict], model: str, filepath: Path) -> Path:
@@ -914,24 +940,179 @@ def _export_pdf(messages: list[dict], model: str, filepath: Path) -> Path:
     return filepath
 
 
+def _ensure_docx() -> None:
+    try:
+        import docx  # noqa: F401
+    except ImportError:
+        console.print("[yellow]Installing python-docx for DOCX export…[/yellow]")
+        _pip_install(["python-docx>=1.0.0"])
+
+
+def _export_docx(messages: list[dict], model: str, filepath: Path) -> Path:
+    _ensure_docx()
+    from docx import Document  # noqa: PLC0415
+    from docx.shared import Pt, RGBColor  # noqa: PLC0415
+    from docx.enum.text import WD_ALIGN_PARAGRAPH  # noqa: PLC0415
+
+    ts          = datetime.now()
+    model_short = model.split(":")[0].capitalize()
+    user_turns  = [m for m in messages if m["role"] == "user"]
+
+    doc = Document()
+
+    # ── Title ──────────────────────────────────────────────────────────────────
+    p = doc.add_paragraph()
+    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r = p.add_run("Worksafe AI — Conversation Export")
+    r.bold = True
+    r.font.size = Pt(18)
+    r.font.color.rgb = RGBColor(0x00, 0x78, 0xBE)
+
+    meta = doc.add_paragraph()
+    meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    mr = meta.add_run(
+        f"Date: {ts.strftime('%Y-%m-%d %H:%M')}   "
+        f"Model: {model}   Turns: {len(user_turns)}"
+    )
+    mr.font.size = Pt(9)
+    mr.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
+    doc.add_paragraph()
+
+    # ── Messages ───────────────────────────────────────────────────────────────
+    for msg in messages:
+        role, content = msg["role"], msg["content"].strip()
+        if role == "system":
+            p = doc.add_paragraph()
+            r = p.add_run(f"System: {content}")
+            r.italic = True
+            r.font.size = Pt(9)
+            r.font.color.rgb = RGBColor(0xAA, 0xAA, 0xAA)
+            doc.add_paragraph()
+        elif role == "user":
+            lp = doc.add_paragraph()
+            lr = lp.add_run("You")
+            lr.bold = True
+            lr.font.color.rgb = RGBColor(0x14, 0x5A, 0xBE)
+            doc.add_paragraph(content)
+        elif role == "assistant":
+            lp = doc.add_paragraph()
+            lr = lp.add_run(model_short)
+            lr.bold = True
+            lr.font.color.rgb = RGBColor(0x0A, 0x82, 0x46)
+            doc.add_paragraph(content)
+            doc.add_paragraph()
+
+    # ── Footer ─────────────────────────────────────────────────────────────────
+    doc.add_paragraph()
+    fp = doc.add_paragraph()
+    fr = fp.add_run(f"Generated by Worksafe AI v{APP_VERSION} — 100% private, local AI.")
+    fr.italic = True
+    fr.font.size = Pt(8)
+    fr.font.color.rgb = RGBColor(0xAA, 0xAA, 0xAA)
+
+    doc.save(str(filepath))
+    return filepath
+
+
+def _export_json(messages: list[dict], model: str, filepath: Path) -> Path:
+    ts   = datetime.now()
+    data = {
+        "meta": {
+            "app":        "Worksafe AI",
+            "version":    APP_VERSION,
+            "exported_at": ts.isoformat(),
+            "model":      model,
+            "turn_count": len([m for m in messages if m["role"] == "user"]),
+        },
+        "messages": [
+            {"index": i, "role": m["role"], "content": m["content"]}
+            for i, m in enumerate(messages)
+        ],
+    }
+    filepath.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    return filepath
+
+
 def export_conversation(
     messages: list[dict],
     model: str,
     filepath: Optional[Path] = None,
     fmt: str = "md",
 ) -> Path:
-    ts     = datetime.now()
-    ts_str = ts.strftime("%Y-%m-%d_%H-%M-%S")
-    ext    = {"md": ".md", "html": ".html", "pdf": ".pdf"}.get(fmt, ".md")
-
+    ts_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    ext    = {"md": ".md", "html": ".html", "pdf": ".pdf",
+              "docx": ".docx", "json": ".json"}.get(fmt, ".md")
     if filepath is None:
         filepath = Path.cwd() / f"worksafe-ai-{ts_str}{ext}"
 
-    if fmt == "html":
-        return _export_html(messages, model, filepath)
-    if fmt == "pdf":
-        return _export_pdf(messages, model, filepath)
-    return _export_markdown(messages, model, filepath)
+    dispatch = {
+        "html": _export_html,
+        "pdf":  _export_pdf,
+        "docx": _export_docx,
+        "json": _export_json,
+    }
+    return dispatch.get(fmt, _export_markdown)(messages, model, filepath)
+
+
+# ── Session management ────────────────────────────────────────────────────────
+
+def _session_path(name: str) -> Path:
+    safe = re.sub(r"[^\w\-]", "_", name.strip())
+    return SESSIONS_DIR / f"{safe}.json"
+
+
+def save_session(name: str, model: str, messages: list[dict], system_prompt: str) -> Path:
+    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    path = _session_path(name)
+    data = {
+        "name":          name,
+        "model":         model,
+        "system_prompt": system_prompt,
+        "version":       APP_VERSION,
+        "saved_at":      datetime.now().isoformat(),
+        "messages":      messages,
+    }
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def load_session(name: str) -> dict:
+    path = _session_path(name)
+    if not path.exists():
+        # Try partial match
+        matches = list(SESSIONS_DIR.glob(f"*{re.sub(r'[^\\w]', '_', name)}*.json"))
+        if len(matches) == 1:
+            path = matches[0]
+        else:
+            raise FileNotFoundError(f"Session '{name}' not found.")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def list_sessions() -> list[dict]:
+    if not SESSIONS_DIR.exists():
+        return []
+    sessions = []
+    for f in sorted(SESSIONS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+            sessions.append({
+                "name":       d.get("name", f.stem),
+                "model":      d.get("model", "unknown"),
+                "saved_at":   d.get("saved_at", "")[:16].replace("T", " "),
+                "turns":      len([m for m in d.get("messages", []) if m["role"] == "user"]),
+                "file":       f,
+            })
+        except Exception:
+            pass
+    return sessions
+
+
+def delete_session(name: str) -> bool:
+    path = _session_path(name)
+    if path.exists():
+        path.unlink()
+        return True
+    return False
 
 
 # ── Chat engine ───────────────────────────────────────────────────────────────
@@ -965,9 +1146,10 @@ def stream_chat(model: str, messages: list[dict]) -> str:
 
 
 def chat_loop(model: str, initial_system: Optional[str] = None) -> None:
-    current_system = initial_system or DEFAULT_SYSTEM_PROMPT
+    current_system  = initial_system or DEFAULT_SYSTEM_PROMPT
     messages: list[dict] = [{"role": "system", "content": current_system}]
-    model_short = model.split(":")[0].capitalize()
+    model_short     = model.split(":")[0].capitalize()
+    pending_image:  Optional[Path] = None   # image attached for the next message
 
     console.print()
     console.print(Panel(
@@ -978,8 +1160,14 @@ def chat_loop(model: str, initial_system: Optional[str] = None) -> None:
     console.print()
 
     while True:
+        prompt_suffix = (
+            f" [dim cyan]📎 {pending_image.name}[/dim cyan]"
+            if pending_image else ""
+        )
         try:
-            user_input = Prompt.ask("[bold bright_green]You[/bold bright_green]").strip()
+            user_input = Prompt.ask(
+                f"[bold bright_green]You[/bold bright_green]{prompt_suffix}"
+            ).strip()
         except (KeyboardInterrupt, EOFError):
             console.print("\n[dim]Session ended. All data stayed on this machine.[/dim]")
             break
@@ -1013,7 +1201,8 @@ def chat_loop(model: str, initial_system: Optional[str] = None) -> None:
 
         # ── New conversation ──────────────────────────────────────────────────
         if cmd == "/new":
-            messages = [{"role": "system", "content": current_system}]
+            messages      = [{"role": "system", "content": current_system}]
+            pending_image = None
             console.print("[yellow]Conversation cleared — fresh start.[/yellow]")
             continue
 
@@ -1029,6 +1218,46 @@ def chat_loop(model: str, initial_system: Optional[str] = None) -> None:
                     console.print(f"[{style}]{label}:[/{style}] {m['content']}\n")
             continue
 
+        # ── Search ────────────────────────────────────────────────────────────
+        if cmd.startswith("/search"):
+            term = cmd_raw[7:].strip()
+            if not term:
+                console.print("[yellow]Usage: /search <term>[/yellow]")
+                continue
+            hits = [
+                (i, m) for i, m in enumerate(messages)
+                if m["role"] in ("user", "assistant")
+                and term.lower() in m["content"].lower()
+            ]
+            if not hits:
+                console.print(f"[dim]No matches for '[yellow]{term}[/yellow]'[/dim]")
+            else:
+                console.print(
+                    f"\n[bold cyan]Found [yellow]{len(hits)}[/yellow] "
+                    f"match(es) for '[yellow]{term}[/yellow]':[/bold cyan]\n"
+                )
+                for idx, m in hits:
+                    role_style = "bright_green" if m["role"] == "user" else "bright_cyan"
+                    label      = "You" if m["role"] == "user" else model_short
+                    content    = m["content"]
+                    pos        = content.lower().find(term.lower())
+                    ctx_start  = max(0, pos - 80)
+                    ctx_end    = min(len(content), pos + len(term) + 80)
+                    excerpt    = (
+                        ("…" if ctx_start > 0 else "")
+                        + content[ctx_start:ctx_end]
+                        + ("…" if ctx_end < len(content) else "")
+                    )
+                    # Rich Text for safe highlighting
+                    snippet = Text(excerpt)
+                    snippet.highlight_words([term], style="bold yellow", case_sensitive=False)
+                    console.print(
+                        f"  [{role_style}]{label}[/{role_style}] "
+                        f"[dim](message #{idx})[/dim]"
+                    )
+                    console.print("  ", snippet, "\n")
+            continue
+
         # ── Export ────────────────────────────────────────────────────────────
         if cmd.startswith("/export"):
             turns = [m for m in messages if m["role"] != "system"]
@@ -1037,29 +1266,136 @@ def chat_loop(model: str, initial_system: Optional[str] = None) -> None:
                 continue
             arg      = cmd_raw[7:].strip()
             fmt      = "md"
-            out_path = None
+            out_path: Optional[Path] = None
             if arg:
-                if arg.lower() in ("html", "htm"):
+                key = arg.lower()
+                if key in ("html", "htm"):
                     fmt = "html"
-                elif arg.lower() == "pdf":
+                elif key == "pdf":
                     fmt = "pdf"
-                elif arg.lower() in ("md", "markdown"):
+                elif key in ("docx", "word"):
+                    fmt = "docx"
+                elif key == "json":
+                    fmt = "json"
+                elif key in ("md", "markdown"):
                     fmt = "md"
                 else:
                     out_path = Path(arg).expanduser()
-                    ext = out_path.suffix.lower()
-                    if ext in (".html", ".htm"):
-                        fmt = "html"
-                    elif ext == ".pdf":
-                        fmt = "pdf"
+                    fmt = {
+                        ".html": "html", ".htm": "html",
+                        ".pdf":  "pdf",
+                        ".docx": "docx",
+                        ".json": "json",
+                    }.get(out_path.suffix.lower(), "md")
             saved = export_conversation(messages, model, out_path, fmt)
-            fmt_label = {"md": "Markdown", "html": "HTML", "pdf": "PDF"}[fmt]
+            fmt_label = {
+                "md": "Markdown", "html": "HTML",
+                "pdf": "PDF", "docx": "Word (DOCX)", "json": "JSON",
+            }[fmt]
             console.print(Panel(
                 f"[bold green]✓  Exported as {fmt_label}:[/bold green]\n"
                 f"[cyan]{saved}[/cyan]\n\n"
                 f"[dim]{len(turns)} message(s) · model: {model}[/dim]",
                 title="[bold]Export[/bold]", border_style="green", padding=(0, 2),
             ))
+            continue
+
+        # ── Image attachment ──────────────────────────────────────────────────
+        if cmd.startswith("/image"):
+            if not _is_vision_model(model):
+                console.print(Panel(
+                    "[yellow]The current model doesn't support images.[/yellow]\n"
+                    "Switch to a vision model first:\n"
+                    "  [cyan]llava:7b  llava:13b  llava-llama3:8b  moondream:1.8b[/cyan]",
+                    border_style="yellow", padding=(0, 2),
+                ))
+                continue
+            img_arg = cmd_raw[6:].strip()
+            if not img_arg:
+                console.print("[yellow]Usage: /image <path>[/yellow]")
+                continue
+            img_path = Path(img_arg).expanduser()
+            if not img_path.exists():
+                console.print(f"[red]File not found: {img_path}[/red]")
+                continue
+            if img_path.suffix.lower() not in {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}:
+                console.print("[red]Unsupported image type. Use: jpg, png, gif, webp, bmp[/red]")
+                continue
+            pending_image = img_path
+            console.print(
+                f"[green]✓  Image ready: [cyan]{img_path.name}[/cyan]. "
+                f"Now type your question.[/green]"
+            )
+            continue
+
+        # ── Sessions ──────────────────────────────────────────────────────────
+        if cmd.startswith("/session"):
+            arg = cmd_raw[8:].strip()
+            sub = arg.split(None, 1)
+            subcmd = sub[0].lower() if sub else ""
+
+            if not subcmd or subcmd == "list":
+                sessions = list_sessions()
+                if not sessions:
+                    console.print("[dim]No saved sessions yet. Use [bold]/session save[/bold] to create one.[/dim]")
+                else:
+                    t = Table(title="Saved Sessions", box=box.ROUNDED,
+                              border_style="cyan", title_style="bold cyan")
+                    t.add_column("Name",    style="bold yellow", min_width=20)
+                    t.add_column("Model",   style="cyan",        min_width=16)
+                    t.add_column("Turns",   style="white",       width=7,  justify="right")
+                    t.add_column("Saved",   style="dim",         min_width=16)
+                    for s in sessions:
+                        t.add_row(s["name"], s["model"], str(s["turns"]), s["saved_at"])
+                    console.print(Padding(t, (1, 0)))
+
+            elif subcmd == "save":
+                name = sub[1].strip() if len(sub) > 1 else ""
+                if not name:
+                    try:
+                        name = Prompt.ask("[cyan]Session name[/cyan]").strip()
+                    except (KeyboardInterrupt, EOFError):
+                        console.print("[dim]Save cancelled.[/dim]")
+                        continue
+                if not name:
+                    console.print("[red]Session name cannot be empty.[/red]")
+                    continue
+                path = save_session(name, model, messages, current_system)
+                console.print(f"[green]✓  Session '[yellow]{name}[/yellow]' saved.[/green]")
+
+            elif subcmd == "load":
+                name = sub[1].strip() if len(sub) > 1 else ""
+                if not name:
+                    console.print("[yellow]Usage: /session load <name>[/yellow]")
+                    continue
+                try:
+                    data          = load_session(name)
+                    model         = data["model"]
+                    model_short   = model.split(":")[0].capitalize()
+                    current_system= data.get("system_prompt", DEFAULT_SYSTEM_PROMPT)
+                    messages      = data["messages"]
+                    pending_image = None
+                    console.print(Panel(
+                        f"[bold green]✓  Session '[yellow]{data['name']}[/yellow]' restored.[/bold green]\n"
+                        f"Model: [yellow]{model}[/yellow]   "
+                        f"Turns: [white]{len([m for m in messages if m['role'] == 'user'])}[/white]",
+                        border_style="green", padding=(0, 2),
+                    ))
+                except FileNotFoundError as e:
+                    console.print(f"[red]{e}[/red]")
+
+            elif subcmd == "delete":
+                name = sub[1].strip() if len(sub) > 1 else ""
+                if not name:
+                    console.print("[yellow]Usage: /session delete <name>[/yellow]")
+                    continue
+                if delete_session(name):
+                    console.print(f"[green]✓  Session '[yellow]{name}[/yellow]' deleted.[/green]")
+                else:
+                    console.print(f"[red]Session '{name}' not found.[/red]")
+            else:
+                console.print("[red]Unknown session sub-command. "
+                              "Use: list · save [name] · load <name> · delete <name>[/red]")
             continue
 
         # ── System prompt ─────────────────────────────────────────────────────
@@ -1086,14 +1422,29 @@ def chat_loop(model: str, initial_system: Optional[str] = None) -> None:
 
         # ── Switch model ──────────────────────────────────────────────────────
         if cmd == "/models":
-            model = choose_model(model)
-            model_short = model.split(":")[0].capitalize()
-            messages = [{"role": "system", "content": current_system}]
-            console.print(f"[green]Switched to [yellow]{model}[/yellow]. Conversation reset.[/green]")
+            model         = choose_model(model)
+            model_short   = model.split(":")[0].capitalize()
+            messages      = [{"role": "system", "content": current_system}]
+            pending_image = None   # clear image if model no longer supports it
+            console.print(
+                f"[green]Switched to [yellow]{model}[/yellow]. Conversation reset.[/green]"
+            )
             continue
 
         # ── Send to model ─────────────────────────────────────────────────────
-        messages.append({"role": "user", "content": user_input})
+        user_msg: dict = {"role": "user", "content": user_input}
+        if pending_image and _is_vision_model(model):
+            try:
+                b64 = base64.b64encode(pending_image.read_bytes()).decode()
+                user_msg["images"] = [b64]
+                console.print(
+                    f"[dim cyan]📎 Sending with image: {pending_image.name}[/dim cyan]"
+                )
+            except OSError as e:
+                console.print(f"[red]Could not read image: {e}[/red]")
+            pending_image = None
+
+        messages.append(user_msg)
         console.print()
         console.print(f"[bold bright_cyan]{model_short}[/bold bright_cyan] ", end="")
         response = stream_chat(model, messages)
