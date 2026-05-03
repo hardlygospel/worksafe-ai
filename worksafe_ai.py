@@ -235,9 +235,81 @@ MODELS: list[dict] = [
         "size": "~40 GB",  "min_ram": 48,
         "category": "🔋  High Power",   "color": "yellow",
     },
+    {
+        "id": "gemma3:27b",     "name": "Gemma 3 27B",
+        "desc": "Google's largest Gemma — near GPT-4 quality",
+        "size": "~17 GB",  "min_ram": 24,
+        "category": "🔋  High Power",   "color": "bright_yellow",
+    },
+    {
+        "id": "command-r:35b",  "name": "Command R 35B",
+        "desc": "Cohere — optimised for RAG & tool use",
+        "size": "~20 GB",  "min_ram": 24,
+        "category": "🔋  High Power",   "color": "yellow",
+    },
+    # ── Balanced additions ────────────────────────────────────────────────────
+    {
+        "id": "mistral-nemo:12b","name": "Mistral Nemo 12B",
+        "desc": "Mistral's newer efficient 12B — very strong",
+        "size": "~7 GB",   "min_ram": 10,
+        "category": "⚖️   Balanced",    "color": "bright_cyan",
+    },
+    {
+        "id": "llama3.2:11b",   "name": "Llama 3.2 11B",
+        "desc": "Meta's vision-capable text + image model",
+        "size": "~8 GB",   "min_ram": 12,
+        "category": "⚖️   Balanced",    "color": "cyan",
+    },
+    # ── Coding additions ──────────────────────────────────────────────────────
+    {
+        "id": "qwen2.5-coder:7b","name": "Qwen 2.5 Coder 7B",
+        "desc": "Alibaba's code-specific model — strong completions",
+        "size": "~5 GB",   "min_ram": 8,
+        "category": "💻  Coding",       "color": "bright_blue",
+    },
+    {
+        "id": "qwen2.5-coder:14b","name": "Qwen 2.5 Coder 14B",
+        "desc": "Larger Qwen coder — excellent for complex tasks",
+        "size": "~9 GB",   "min_ram": 12,
+        "category": "💻  Coding",       "color": "blue",
+    },
+    # ── Vision & Multimodal ───────────────────────────────────────────────────
+    {
+        "id": "llava:7b",       "name": "LLaVA 7B",
+        "desc": "Vision-language — describe & reason about images",
+        "size": "~5 GB",   "min_ram": 8,
+        "category": "👁️   Vision",      "color": "bright_yellow",
+    },
+    {
+        "id": "llava:13b",      "name": "LLaVA 13B",
+        "desc": "Better image understanding & analysis",
+        "size": "~8 GB",   "min_ram": 12,
+        "category": "👁️   Vision",      "color": "yellow",
+    },
+    {
+        "id": "moondream:1.8b", "name": "Moondream 1.8B",
+        "desc": "Tiny vision model — fast image Q&A on low-end hardware",
+        "size": "~1.7 GB", "min_ram": 4,
+        "category": "👁️   Vision",      "color": "bright_yellow",
+    },
+    {
+        "id": "llava-llama3:8b","name": "LLaVA Llama 3 8B",
+        "desc": "LLaVA on Llama 3 backbone — strong visual reasoning",
+        "size": "~5 GB",   "min_ram": 8,
+        "category": "👁️   Vision",      "color": "yellow",
+    },
 ]
 
 MODEL_LOOKUP: dict[str, dict] = {m["id"]: m for m in MODELS}
+
+
+def _is_installed(model: str, local: list[str]) -> bool:
+    """Exact match, then untagged base-name match (e.g. 'mistral' → 'mistral:7b')."""
+    if model in local:
+        return True
+    if ":" not in model:
+        return any(m.split(":")[0] == model for m in local)
+    return False
 
 
 # ── Hardware detection ────────────────────────────────────────────────────────
@@ -430,7 +502,10 @@ def print_help() -> None:
         ("/models",             "Browse and switch to a different model"),
         ("/new",                "Start a fresh conversation"),
         ("/history",            "Print conversation history"),
-        ("/export [file]",      "Export conversation to a Markdown file"),
+        ("/export",             "Export conversation to Markdown (default)"),
+        ("/export html",        "Export conversation to a styled HTML page"),
+        ("/export pdf",         "Export conversation to a PDF document"),
+        ("/export <path>",      "Export to a specific path (format from extension)"),
         ("/system",             "Show the current system prompt"),
         ("/system reset",       "Reset system prompt to default"),
         ("/system <text>",      "Set a custom system prompt"),
@@ -604,13 +679,13 @@ def choose_model(
             model = index_map[int(choice)]
         elif choice in MODEL_LOOKUP:
             model = choice
-        elif any(choice.split(":")[0] in loc for loc in local):
+        elif _is_installed(choice, local):
             model = choice
         else:
             console.print("[red]Invalid selection — enter a number or a model name[/red]")
             continue
 
-        if not any(model.split(":")[0] in loc for loc in local):
+        if not _is_installed(model, local):
             if Confirm.ask(
                 f"\n  [yellow]{model}[/yellow] is not downloaded yet. Download it now?",
                 default=True,
@@ -624,58 +699,239 @@ def choose_model(
 
 # ── Export conversation ───────────────────────────────────────────────────────
 
-def export_conversation(
-    messages: list[dict],
-    model: str,
-    filepath: Optional[Path] = None,
-) -> Path:
-    ts     = datetime.now()
-    ts_str = ts.strftime("%Y-%m-%d_%H-%M-%S")
-
-    if filepath is None:
-        filepath = Path.cwd() / f"worksafe-ai-{ts_str}.md"
-
+def _export_markdown(messages: list[dict], model: str, filepath: Path) -> Path:
+    ts          = datetime.now()
     model_short = model.split(":")[0].capitalize()
     user_turns  = [m for m in messages if m["role"] == "user"]
 
     lines = [
-        f"# Worksafe AI — Conversation Export",
-        f"",
-        f"| Field    | Value |",
-        f"|----------|-------|",
+        "# Worksafe AI — Conversation Export", "",
+        "| Field    | Value |",
+        "|----------|-------|",
         f"| Date     | {ts.strftime('%Y-%m-%d %H:%M:%S')} |",
         f"| Model    | `{model}` |",
         f"| Turns    | {len(user_turns)} |",
-        f"| Exported | by Worksafe AI v{APP_VERSION} |",
-        f"",
-        f"---",
-        f"",
+        f"| Version  | Worksafe AI v{APP_VERSION} |",
+        "", "---", "",
     ]
-
     for msg in messages:
-        role = msg["role"]
-        content = msg["content"].strip()
+        role, content = msg["role"], msg["content"].strip()
         if role == "system":
-            lines += [
-                f"> **System Prompt:**  ",
-                f"> {content}",
-                f"",
-                f"---",
-                f"",
-            ]
+            lines += [f"> **System Prompt:** {content}", "", "---", ""]
         elif role == "user":
-            lines += [f"### 🧑 You", f"", content, f""]
+            lines += [f"### 🧑 You", "", content, ""]
         elif role == "assistant":
-            lines += [f"### 🤖 {model_short}", f"", content, f"", f"---", f""]
-
+            lines += [f"### 🤖 {model_short}", "", content, "", "---", ""]
     lines += [
-        f"",
-        f"*Generated by [Worksafe AI](https://github.com/hardlygospel/worksafe-ai) — "
-        f"100% private, running on your own hardware.*",
+        "",
+        "*Generated by [Worksafe AI](https://github.com/hardlygospel/worksafe-ai)"
+        " — 100% private, running on your own hardware.*",
     ]
-
     filepath.write_text("\n".join(lines), encoding="utf-8")
     return filepath
+
+
+def _export_html(messages: list[dict], model: str, filepath: Path) -> Path:
+    ts          = datetime.now()
+    model_short = model.split(":")[0].capitalize()
+    user_turns  = [m for m in messages if m["role"] == "user"]
+
+    def esc(s: str) -> str:
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    body_parts: list[str] = []
+    for msg in messages:
+        role, content = msg["role"], msg["content"].strip()
+        if role == "system":
+            body_parts.append(
+                f'<div class="system"><strong>System Prompt</strong><br>{esc(content)}</div>'
+            )
+        elif role == "user":
+            body_parts.append(
+                f'<div class="bubble user"><span class="label">You</span>'
+                f'<p>{esc(content)}</p></div>'
+            )
+        elif role == "assistant":
+            body_parts.append(
+                f'<div class="bubble ai"><span class="label">{esc(model_short)}</span>'
+                f'<p>{esc(content)}</p></div>'
+            )
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Worksafe AI Export — {ts.strftime('%Y-%m-%d')}</title>
+<style>
+  :root {{
+    --bg:#1a1b1e; --surface:#25262b; --border:#373a40;
+    --text:#c1c2c5; --dim:#5c5f66;
+    --user:#1971c2; --ai:#2c2e33; --system:#1c3a1c;
+    --accent:#339af0; --green:#40c057;
+  }}
+  @media(prefers-color-scheme:light) {{
+    :root {{
+      --bg:#f8f9fa; --surface:#fff; --border:#dee2e6;
+      --text:#212529; --dim:#868e96;
+      --user:#1971c2; --ai:#f1f3f5; --system:#e9f5e9;
+    }}
+  }}
+  *{{box-sizing:border-box; margin:0; padding:0}}
+  body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    background:var(--bg); color:var(--text); padding:2rem 1rem; line-height:1.6}}
+  .wrap{{max-width:820px; margin:0 auto}}
+  header{{text-align:center; margin-bottom:2rem; padding-bottom:1.5rem;
+    border-bottom:1px solid var(--border)}}
+  header h1{{font-size:1.8rem; color:var(--accent); margin-bottom:.4rem}}
+  header p{{color:var(--dim); font-size:.85rem}}
+  .meta{{display:inline-flex; gap:1.5rem; margin-top:.8rem; font-size:.8rem;
+    color:var(--dim)}}
+  .meta span b{{color:var(--text)}}
+  .system{{background:var(--system); border:1px solid var(--border);
+    border-radius:8px; padding:.8rem 1rem; margin:1rem 0;
+    font-size:.82rem; color:var(--dim)}}
+  .bubble{{margin:.8rem 0; padding:1rem 1.2rem; border-radius:12px;
+    border:1px solid var(--border)}}
+  .bubble.user{{background:var(--user); color:#fff; border-color:transparent;
+    margin-left:8%}}
+  .bubble.ai{{background:var(--ai); margin-right:8%}}
+  .label{{font-size:.75rem; font-weight:700; text-transform:uppercase;
+    letter-spacing:.05em; opacity:.7; display:block; margin-bottom:.4rem}}
+  .bubble.user .label{{color:rgba(255,255,255,.7)}}
+  .bubble.ai .label{{color:var(--green)}}
+  p{{white-space:pre-wrap; word-break:break-word}}
+  footer{{text-align:center; margin-top:2.5rem; padding-top:1rem;
+    border-top:1px solid var(--border); font-size:.78rem; color:var(--dim)}}
+  footer a{{color:var(--accent); text-decoration:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>🔒 Worksafe AI</h1>
+    <p>Conversation Export</p>
+    <div class="meta">
+      <span><b>Date</b> {ts.strftime('%Y-%m-%d %H:%M')}</span>
+      <span><b>Model</b> {esc(model)}</span>
+      <span><b>Turns</b> {len(user_turns)}</span>
+    </div>
+  </header>
+  {''.join(body_parts)}
+  <footer>
+    Generated by <a href="https://github.com/hardlygospel/worksafe-ai">Worksafe AI</a>
+    v{APP_VERSION} — 100% private, running on your own hardware.
+  </footer>
+</div>
+</body>
+</html>"""
+
+    filepath.write_text(html, encoding="utf-8")
+    return filepath
+
+
+def _ensure_fpdf2() -> None:
+    try:
+        import fpdf  # noqa: F401
+    except ImportError:
+        console.print("[yellow]Installing fpdf2 for PDF export…[/yellow]")
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "--quiet", "fpdf2>=2.7.0"]
+        )
+
+
+def _export_pdf(messages: list[dict], model: str, filepath: Path) -> Path:
+    _ensure_fpdf2()
+    from fpdf import FPDF  # noqa: PLC0415
+
+    ts          = datetime.now()
+    model_short = model.split(":")[0].capitalize()
+    user_turns  = [m for m in messages if m["role"] == "user"]
+
+    def safe(s: str) -> str:
+        return s.encode("latin-1", errors="replace").decode("latin-1")
+
+    pdf = FPDF(orientation="P", unit="mm", format="A4")
+    pdf.set_auto_page_break(auto=True, margin=18)
+    pdf.add_page()
+
+    # Title
+    pdf.set_font("Helvetica", "B", 20)
+    pdf.set_text_color(0, 120, 190)
+    pdf.cell(0, 12, "Worksafe AI", align="C", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", "", 11)
+    pdf.set_text_color(110, 110, 110)
+    pdf.cell(0, 8, "Conversation Export", align="C", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(3)
+    pdf.set_font("Helvetica", "", 8)
+    pdf.set_text_color(150, 150, 150)
+    meta = (f"Date: {ts.strftime('%Y-%m-%d %H:%M:%S')}   "
+            f"Model: {model}   Turns: {len(user_turns)}")
+    pdf.cell(0, 6, safe(meta), align="C", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(4)
+    pdf.set_draw_color(210, 210, 210)
+    pdf.line(15, pdf.get_y(), 195, pdf.get_y())
+    pdf.ln(6)
+
+    for msg in messages:
+        role, content = msg["role"], msg["content"].strip()
+        if role == "system":
+            pdf.set_font("Helvetica", "I", 8)
+            pdf.set_text_color(160, 160, 160)
+            excerpt = content[:300] + ("…" if len(content) > 300 else "")
+            pdf.multi_cell(0, 5, safe(f"System: {excerpt}"))
+            pdf.ln(4)
+        elif role == "user":
+            pdf.set_font("Helvetica", "B", 10)
+            pdf.set_text_color(20, 90, 190)
+            pdf.cell(0, 7, "You", new_x="LMARGIN", new_y="NEXT")
+            pdf.set_font("Helvetica", "", 10)
+            pdf.set_text_color(45, 45, 45)
+            pdf.multi_cell(0, 6, safe(content))
+            pdf.ln(3)
+        elif role == "assistant":
+            pdf.set_font("Helvetica", "B", 10)
+            pdf.set_text_color(10, 130, 70)
+            pdf.cell(0, 7, safe(model_short), new_x="LMARGIN", new_y="NEXT")
+            pdf.set_font("Helvetica", "", 10)
+            pdf.set_text_color(45, 45, 45)
+            pdf.multi_cell(0, 6, safe(content))
+            pdf.ln(3)
+            pdf.set_draw_color(225, 225, 225)
+            pdf.line(15, pdf.get_y(), 195, pdf.get_y())
+            pdf.ln(5)
+
+    pdf.ln(4)
+    pdf.set_font("Helvetica", "I", 8)
+    pdf.set_text_color(160, 160, 160)
+    pdf.cell(
+        0, 6,
+        safe(f"Generated by Worksafe AI v{APP_VERSION} — 100% private, local AI."),
+        align="C",
+    )
+
+    pdf.output(str(filepath))
+    return filepath
+
+
+def export_conversation(
+    messages: list[dict],
+    model: str,
+    filepath: Optional[Path] = None,
+    fmt: str = "md",
+) -> Path:
+    ts     = datetime.now()
+    ts_str = ts.strftime("%Y-%m-%d_%H-%M-%S")
+    ext    = {"md": ".md", "html": ".html", "pdf": ".pdf"}.get(fmt, ".md")
+
+    if filepath is None:
+        filepath = Path.cwd() / f"worksafe-ai-{ts_str}{ext}"
+
+    if fmt == "html":
+        return _export_html(messages, model, filepath)
+    if fmt == "pdf":
+        return _export_pdf(messages, model, filepath)
+    return _export_markdown(messages, model, filepath)
 
 
 # ── Chat engine ───────────────────────────────────────────────────────────────
@@ -779,17 +1035,31 @@ def chat_loop(model: str, initial_system: Optional[str] = None) -> None:
             if not turns:
                 console.print("[yellow]Nothing to export — have a conversation first.[/yellow]")
                 continue
-            arg = cmd_raw[7:].strip()
-            out_path = Path(arg).expanduser() if arg else None
-            saved = export_conversation(messages, model, out_path)
-            console.print(
-                Panel(
-                    f"[bold green]✓  Exported to:[/bold green]\n"
-                    f"[cyan]{saved}[/cyan]\n\n"
-                    f"[dim]{len(turns)} message(s) · model: {model}[/dim]",
-                    title="[bold]Export[/bold]", border_style="green", padding=(0, 2),
-                )
-            )
+            arg      = cmd_raw[7:].strip()
+            fmt      = "md"
+            out_path = None
+            if arg:
+                if arg.lower() in ("html", "htm"):
+                    fmt = "html"
+                elif arg.lower() == "pdf":
+                    fmt = "pdf"
+                elif arg.lower() in ("md", "markdown"):
+                    fmt = "md"
+                else:
+                    out_path = Path(arg).expanduser()
+                    ext = out_path.suffix.lower()
+                    if ext in (".html", ".htm"):
+                        fmt = "html"
+                    elif ext == ".pdf":
+                        fmt = "pdf"
+            saved = export_conversation(messages, model, out_path, fmt)
+            fmt_label = {"md": "Markdown", "html": "HTML", "pdf": "PDF"}[fmt]
+            console.print(Panel(
+                f"[bold green]✓  Exported as {fmt_label}:[/bold green]\n"
+                f"[cyan]{saved}[/cyan]\n\n"
+                f"[dim]{len(turns)} message(s) · model: {model}[/dim]",
+                title="[bold]Export[/bold]", border_style="green", padding=(0, 2),
+            ))
             continue
 
         # ── System prompt ─────────────────────────────────────────────────────
