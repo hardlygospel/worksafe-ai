@@ -44,11 +44,14 @@ When you're at home and want AI assistance without worrying about data handling,
 | 💬 **Streaming Chat** | Responses appear token-by-token in real time |
 | 📄 **Export: MD / HTML / PDF / DOCX / JSON** | Five export formats with `/export` |
 | 🖼️ **Image Input** | Attach images for vision models (llava, moondream) with `/image` |
+| 🖼️ **PDF Image Thumbnails** | Attached images appear inline in exported PDFs |
 | 💾 **Named Sessions** | Save, restore, and manage named conversations with `/session` |
 | 🔍 **Conversation Search** | Find any keyword in the current chat with `/search <term>` |
 | 🖥️ **Shell Completions** | Tab-complete models & flags in Bash, Zsh, and Fish |
 | ✏️ **Custom System Prompt** | Set your own AI persona with `/system <text>` |
 | 🔄 **Model Switching** | Hot-swap models mid-session with `/models` |
+| 🔄 **Model Updater** | Check for and pull model updates with `/update` |
+| 📑 **DOCX Table of Contents** | Word exports include a TOC with heading styles |
 | 🖥️ **Cross-Platform** | macOS, Linux, Windows (PowerShell & WSL) |
 | 📜 **Free Software** | GNU GPL v3 — no lock-in, no fees, ever |
 
@@ -195,6 +198,7 @@ All models are free, open-weight, and run locally. Organised by use case:
 | `/system` | Show current system prompt |
 | `/system reset` | Reset to default system prompt |
 | `/system <text>` | Set a custom system prompt |
+| `/update` | Check for and pull model updates |
 | `/clear` | Clear the screen |
 | `/about` | Privacy & licence information |
 | `/quit` | Exit Worksafe AI |
@@ -412,9 +416,9 @@ Contributions are welcome! Open an issue or pull request for:
 - ✅ ~~Image input for vision models~~ — `/image <path>` for llava, moondream
 - ✅ ~~Conversation search~~ — `/search <term>` with highlighted results
 - ✅ ~~Named sessions & session restore~~ — `/session save/load/delete`
-- DOCX table-of-contents / heading styles
-- Export to PDF with image thumbnails
-- Ollama model update checker (`/update`)
+- ✅ ~~DOCX table-of-contents / heading styles~~ — TOC field + Heading styles included
+- ✅ ~~Export to PDF with image thumbnails~~ — attached images appear inline in PDF
+- ✅ ~~Ollama model update checker (`/update`)~~ — shows installed models, re-pulls selected
 
 ---
 

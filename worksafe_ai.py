@@ -25,11 +25,13 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 import platform
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -84,7 +86,7 @@ console = Console()
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 OLLAMA_API  = "http://localhost:11434"
-APP_VERSION   = "3.0.0"
+APP_VERSION   = "3.1.0"
 SESSIONS_DIR  = Path.home() / ".worksafe_ai" / "sessions"
 VISION_MODELS = frozenset({"llava", "moondream", "bakllava", "llava-llama3", "llava-phi3"})
 
@@ -537,6 +539,7 @@ def print_help() -> None:
         ("/system",                  "Show current system prompt"),
         ("/system reset",            "Reset system prompt to default"),
         ("/system <text>",           "Set a custom system prompt"),
+        ("/update",                  "Check for and pull model updates"),
         ("/clear",                   "Clear the screen"),
         ("/about",                   "Privacy and licence information"),
         ("/quit  /exit",             "Exit Worksafe AI"),
@@ -911,6 +914,21 @@ def _export_pdf(messages: list[dict], model: str, filepath: Path) -> Path:
             pdf.set_font("Helvetica", "B", 10)
             pdf.set_text_color(20, 90, 190)
             pdf.cell(0, 7, "You", new_x="LMARGIN", new_y="NEXT")
+            # Embed image thumbnails for vision messages
+            for b64img in msg.get("images", []):
+                try:
+                    img_data = base64.b64decode(b64img)
+                    suffix = ".png" if img_data[:4] == b"\x89PNG" else ".jpg"
+                    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                        tmp.write(img_data)
+                        tmp_path = tmp.name
+                    try:
+                        pdf.image(tmp_path, w=60)
+                        pdf.ln(2)
+                    finally:
+                        os.unlink(tmp_path)
+                except Exception:
+                    pass
             pdf.set_font("Helvetica", "", 10)
             pdf.set_text_color(45, 45, 45)
             pdf.multi_cell(0, 6, safe(content))
@@ -948,6 +966,41 @@ def _ensure_docx() -> None:
         _pip_install(["python-docx>=1.0.0"])
 
 
+def _docx_add_toc(doc) -> None:
+    """Insert a TOC field that Word updates on open (Right-click → Update Field)."""
+    from docx.oxml.ns import qn   # noqa: PLC0415
+    from docx.oxml import OxmlElement  # noqa: PLC0415
+
+    para = doc.add_paragraph()
+    run  = para.add_run()
+
+    begin = OxmlElement("w:fldChar")
+    begin.set(qn("w:fldCharType"), "begin")
+    run._r.append(begin)
+
+    instr = OxmlElement("w:instrText")
+    instr.set(qn("xml:space"), "preserve")
+    instr.text = ' TOC \\o "1-2" \\h \\z \\u '
+    run._r.append(instr)
+
+    sep = OxmlElement("w:fldChar")
+    sep.set(qn("w:fldCharType"), "separate")
+    run._r.append(sep)
+
+    placeholder = OxmlElement("w:r")
+    rpr = OxmlElement("w:rPr")
+    rpr.append(OxmlElement("w:noProof"))
+    placeholder.append(rpr)
+    t_el = OxmlElement("w:t")
+    t_el.text = "(Right-click → Update Field to generate table of contents)"
+    placeholder.append(t_el)
+    para._p.append(placeholder)
+
+    end = OxmlElement("w:fldChar")
+    end.set(qn("w:fldCharType"), "end")
+    run._r.append(end)
+
+
 def _export_docx(messages: list[dict], model: str, filepath: Path) -> Path:
     _ensure_docx()
     from docx import Document  # noqa: PLC0415
@@ -960,13 +1013,9 @@ def _export_docx(messages: list[dict], model: str, filepath: Path) -> Path:
 
     doc = Document()
 
-    # ── Title ──────────────────────────────────────────────────────────────────
-    p = doc.add_paragraph()
-    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    r = p.add_run("Worksafe AI — Conversation Export")
-    r.bold = True
-    r.font.size = Pt(18)
-    r.font.color.rgb = RGBColor(0x00, 0x78, 0xBE)
+    # ── Title (Heading 1) ──────────────────────────────────────────────────────
+    h = doc.add_heading("Worksafe AI — Conversation Export", level=1)
+    h.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     meta = doc.add_paragraph()
     meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -978,7 +1027,12 @@ def _export_docx(messages: list[dict], model: str, filepath: Path) -> Path:
     mr.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
     doc.add_paragraph()
 
-    # ── Messages ───────────────────────────────────────────────────────────────
+    # ── Table of Contents ──────────────────────────────────────────────────────
+    _docx_add_toc(doc)
+    doc.add_paragraph()
+
+    # ── Messages (Heading 2 for speaker labels) ────────────────────────────────
+    turn_index = 0
     for msg in messages:
         role, content = msg["role"], msg["content"].strip()
         if role == "system":
@@ -989,16 +1043,11 @@ def _export_docx(messages: list[dict], model: str, filepath: Path) -> Path:
             r.font.color.rgb = RGBColor(0xAA, 0xAA, 0xAA)
             doc.add_paragraph()
         elif role == "user":
-            lp = doc.add_paragraph()
-            lr = lp.add_run("You")
-            lr.bold = True
-            lr.font.color.rgb = RGBColor(0x14, 0x5A, 0xBE)
+            turn_index += 1
+            doc.add_heading(f"You  (turn {turn_index})", level=2)
             doc.add_paragraph(content)
         elif role == "assistant":
-            lp = doc.add_paragraph()
-            lr = lp.add_run(model_short)
-            lr.bold = True
-            lr.font.color.rgb = RGBColor(0x0A, 0x82, 0x46)
+            doc.add_heading(model_short, level=2)
             doc.add_paragraph(content)
             doc.add_paragraph()
 
@@ -1113,6 +1162,71 @@ def delete_session(name: str) -> bool:
         path.unlink()
         return True
     return False
+
+
+# ── Model update checker ──────────────────────────────────────────────────────
+
+def _check_updates() -> None:
+    """Show installed models and offer to re-pull any for latest version."""
+    try:
+        r = requests.get(f"{OLLAMA_API}/api/tags", timeout=5)
+        models_data = r.json().get("models", [])
+    except Exception as e:
+        console.print(f"[red]Could not reach Ollama: {e}[/red]")
+        return
+
+    if not models_data:
+        console.print("[dim]No models installed yet.[/dim]")
+        return
+
+    t = Table(
+        title="Installed Models", box=box.ROUNDED,
+        border_style="cyan", title_style="bold cyan",
+    )
+    t.add_column("#",        width=4,  justify="right", style="bold white")
+    t.add_column("Model",    style="bold yellow", min_width=26)
+    t.add_column("Size",     style="dim cyan",    width=10,  justify="right")
+    t.add_column("Modified", style="dim",         min_width=16)
+
+    model_names: list[str] = []
+    for i, m in enumerate(models_data, 1):
+        name     = m["name"]
+        size_gb  = m.get("size", 0) / (1024 ** 3)
+        modified = m.get("modified_at", "")[:16].replace("T", " ")
+        t.add_row(str(i), name, f"{size_gb:.1f} GB", modified)
+        model_names.append(name)
+
+    console.print(Padding(t, (1, 0)))
+    console.print(
+        "[dim]Enter a number, space-separated numbers (e.g. [bold]1 3[/bold]), "
+        "[bold]all[/bold], or press Enter to cancel.[/dim]"
+    )
+
+    try:
+        choice = Prompt.ask("[cyan]Update which model(s)[/cyan]", default="").strip()
+    except (KeyboardInterrupt, EOFError):
+        return
+
+    if not choice:
+        console.print("[dim]No models selected.[/dim]")
+        return
+
+    if choice.lower() == "all":
+        to_update = model_names
+    else:
+        to_update = []
+        for token in choice.split():
+            if token.isdigit():
+                idx = int(token) - 1
+                if 0 <= idx < len(model_names):
+                    to_update.append(model_names[idx])
+
+    if not to_update:
+        console.print("[dim]No valid selection.[/dim]")
+        return
+
+    for name in to_update:
+        pull_model(name)
 
 
 # ── Chat engine ───────────────────────────────────────────────────────────────
@@ -1418,6 +1532,11 @@ def chat_loop(model: str, initial_system: Optional[str] = None) -> None:
                     f"[bold green]✓  System prompt updated:[/bold green]\n{current_system}",
                     border_style="green", padding=(0, 2),
                 ))
+            continue
+
+        # ── Model update checker ──────────────────────────────────────────────
+        if cmd == "/update":
+            _check_updates()
             continue
 
         # ── Switch model ──────────────────────────────────────────────────────
