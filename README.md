@@ -39,10 +39,11 @@ When you're at home and want AI assistance without worrying about data handling,
 | 🔒 **Fully Offline** | Zero internet required after first model download |
 | 🚀 **One-Command Setup** | `setup.sh` (macOS/Linux) or `setup.ps1` (Windows) |
 | 🎨 **Beautiful Terminal UI** | Rich interface with colours, progress bars, and streaming |
-| 🤖 **25+ Curated Models** | Organised by use case with size & RAM requirements |
+| 🤖 **35+ Curated Models** | 7 categories — Fast, Balanced, Reasoning, Coding, Multilingual, High Power, Vision |
 | 🖥️ **GPU Detection** | Auto-detects Apple Silicon, NVIDIA, AMD and recommends models |
 | 💬 **Streaming Chat** | Responses appear token-by-token in real time |
-| 📝 **Export to Markdown** | Save any conversation to a `.md` file with `/export` |
+| 📄 **Export: MD / HTML / PDF** | Save conversations in three formats with `/export` |
+| 🖥️ **Shell Completions** | Tab-complete models & flags in Bash, Zsh, and Fish |
 | ✏️ **Custom System Prompt** | Set your own AI persona with `/system <text>` |
 | 🔄 **Model Switching** | Hot-swap models mid-session with `/models` |
 | 🖥️ **Cross-Platform** | macOS, Linux, Windows (PowerShell & WSL) |
@@ -114,13 +115,15 @@ All models are free, open-weight, and run locally. Organised by use case:
 | `gemma3:1b` | ~0.8 GB | Google's smallest capable model |
 | `phi3.5:mini` | ~2.3 GB | Microsoft — efficient & capable |
 
-### ⚖️ Balanced (8 GB RAM)
+### ⚖️ Balanced (8–12 GB RAM)
 | Model | Size | Best For |
 |---|---|---|
 | `llama3.1:8b` | ~5 GB | ★ Best everyday balance |
 | `mistral:7b` | ~4 GB | Reasoning, writing, summarisation |
+| `mistral-nemo:12b` | ~7 GB | Mistral's newer efficient 12B — very strong |
 | `gemma3:4b` | ~3 GB | Great on Apple Silicon |
 | `gemma3:12b` | ~8 GB | Excellent general-purpose quality |
+| `llama3.2:11b` | ~8 GB | Vision-capable text + image model |
 | `qwen2.5:7b` | ~5 GB | Multilingual (29 languages) |
 
 ### 🧠 Reasoning (12 GB RAM)
@@ -137,6 +140,8 @@ All models are free, open-weight, and run locally. Organised by use case:
 | `codellama:7b` | ~4 GB | All-language code specialist |
 | `codellama:13b` | ~8 GB | Better generation & explanations |
 | `codegemma:7b` | ~5 GB | Google — strong Python & JS |
+| `qwen2.5-coder:7b` | ~5 GB | Alibaba's code-specific model |
+| `qwen2.5-coder:14b` | ~9 GB | Larger Qwen coder — complex tasks |
 | `deepseek-coder-v2:16b` | ~10 GB | Top-tier debugging & generation |
 | `starcoder2:15b` | ~9 GB | 600+ programming languages |
 
@@ -150,10 +155,20 @@ All models are free, open-weight, and run locally. Organised by use case:
 ### 🔋 High Power (24–48 GB RAM)
 | Model | Size | Best For |
 |---|---|---|
+| `gemma3:27b` | ~17 GB | Google's largest Gemma — near GPT-4 quality |
+| `command-r:35b` | ~20 GB | Cohere — optimised for RAG & tool use |
 | `mixtral:8x7b` | ~26 GB | Mixture-of-experts architecture |
 | `qwen2.5:32b` | ~20 GB | Large multilingual model |
 | `llama3.1:70b` | ~40 GB | Near GPT-4 quality |
 | `deepseek-r1:70b` | ~40 GB | Frontier-class reasoning |
+
+### 👁️ Vision & Multimodal (8–12 GB RAM)
+| Model | Size | Best For |
+|---|---|---|
+| `moondream:1.8b` | ~1.7 GB | Tiny vision model — fast image Q&A |
+| `llava:7b` | ~5 GB | Describe & reason about images |
+| `llava-llama3:8b` | ~5 GB | LLaVA on Llama 3 — strong visual reasoning |
+| `llava:13b` | ~8 GB | Better image understanding & analysis |
 
 ---
 
@@ -165,7 +180,10 @@ All models are free, open-weight, and run locally. Organised by use case:
 | `/models` | Browse all models and switch |
 | `/new` | Start a fresh conversation |
 | `/history` | Print conversation so far |
-| `/export [path]` | Save conversation to Markdown |
+| `/export` | Save conversation as Markdown (default) |
+| `/export html` | Save as a styled HTML page |
+| `/export pdf` | Save as a PDF document |
+| `/export <path>` | Save to a specific path (format from extension) |
 | `/system` | Show current system prompt |
 | `/system reset` | Reset to default system prompt |
 | `/system <text>` | Set a custom system prompt |
@@ -187,30 +205,72 @@ All models are free, open-weight, and run locally. Organised by use case:
 
 ---
 
-## 📄 Export to Markdown
+## 📄 Export Formats
 
-Save any conversation with `/export` — a clean `.md` file is created in the current directory:
+Save any conversation in three formats using the `/export` command:
 
-```markdown
+| Command | Output | Use case |
+|---|---|---|
+| `/export` | `.md` Markdown file | Notes, documentation, plain text |
+| `/export html` | `.html` styled page | Sharing, archiving, printing |
+| `/export pdf` | `.pdf` document | Reports, records, offline reading |
+| `/export ~/chat.html` | Specific path + format from extension | Custom location |
+
+### Markdown export
+Clean, readable `.md` dropped in the current directory:
+```
 # Worksafe AI — Conversation Export
-
-| Field    | Value              |
-|----------|--------------------|
-| Date     | 2024-11-15 14:32:01|
-| Model    | `llama3.1:8b`      |
-| Turns    | 6                  |
-
----
+| Date  | 2024-11-15 14:32 |
+| Model | llama3.1:8b      |
 
 ### 🧑 You
 How do I reverse a string in Python?
 
 ### 🤖 Llama3
 The simplest way is: `s[::-1]`
-...
 ```
 
-You can also specify a path: `/export ~/Desktop/my-chat.md`
+### HTML export
+A self-contained styled page with dark/light mode, chat bubbles, and metadata — no external dependencies, opens in any browser.
+
+### PDF export
+A clean A4 document via [`fpdf2`](https://pyfpdf.github.io/fpdf2/) — installed automatically on first use, no system binaries needed.
+
+---
+
+## 🔧 Shell Completions
+
+Tab-complete model names and flags in your shell.
+
+### Bash
+```bash
+echo 'source /path/to/worksafe-ai/completions/worksafe_ai.bash' >> ~/.bashrc
+source ~/.bashrc
+```
+
+### Zsh
+```zsh
+mkdir -p ~/.zsh/completions
+cp completions/worksafe_ai.zsh ~/.zsh/completions/_worksafe_ai
+
+# Add to ~/.zshrc if not already present:
+echo 'fpath=(~/.zsh/completions $fpath)' >> ~/.zshrc
+echo 'autoload -Uz compinit && compinit' >> ~/.zshrc
+source ~/.zshrc
+```
+
+### Fish
+```fish
+cp completions/worksafe_ai.fish ~/.config/fish/completions/
+# Reopen your terminal — completions load automatically
+```
+
+Once installed, tab-completion works like this:
+```
+worksafe_ai --model ll<TAB>
+# → llama3.2:1b   llama3.2:3b   llama3.1:8b   llava:7b   ...
+```
+When Ollama is running, completions are pulled live from your installed models. When it isn't, the full catalogue is used as a fallback.
 
 ---
 
@@ -263,6 +323,7 @@ Worksafe AI is designed for people who need to:
 | Disk | 1–40 GB per model |
 | CPU | Any modern x86-64 or Apple Silicon |
 | GPU | Optional — CPU works, GPU gives faster responses |
+| `fpdf2` | Optional — auto-installed on first `/export pdf` |
 
 ---
 
@@ -288,10 +349,14 @@ python3 worksafe_ai.py --model mistral:7b --system "Be concise."
 ## 🤝 Contributing
 
 Contributions are welcome! Open an issue or pull request for:
-- New model presets or categories
-- Additional export formats (HTML, PDF)
-- Shell completions
-- Bug fixes
+- ✅ ~~New model presets or categories~~ — 35+ models across 7 categories
+- ✅ ~~Additional export formats (HTML, PDF)~~ — Markdown, HTML, and PDF supported
+- ✅ ~~Shell completions~~ — Bash, Zsh, and Fish included
+- ✅ ~~Bug fixes~~ — model install detection fixed
+- Additional export formats (DOCX, JSON transcript)
+- Image input support for vision models (llava, moondream)
+- Conversation search (`/search <term>`)
+- Named sessions & session restore
 
 ---
 
